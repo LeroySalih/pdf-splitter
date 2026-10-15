@@ -29,3 +29,15 @@ Run a single worker (job state is in memory). Serve over HTTPS in production, si
    with a message to use fewer pages per file).
 
 Wrong pins are throttled (5 failures per IP per minute). Tests: `pip install pytest && pytest`.
+
+## Deploy with Docker Compose
+
+```
+cp .env.example .env     # set PDF_SPLITTER_PIN
+docker compose up -d --build
+```
+
+Listens on `PORT` (default 8000). Put a reverse proxy with HTTPS in front (e.g. Caddy/nginx) and
+raise its upload limit to match `PDF_SPLITTER_MAX_UPLOAD_MB` (nginx: `client_max_body_size`).
+Scratch space is a RAM-backed tmpfs (`SCRATCH_SIZE`, default 4g, counts against memory only as used),
+so files never touch disk and disappear if the container stops.
