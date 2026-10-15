@@ -4,3 +4,4 @@ python-multipart>=0.0.9
 pypdf>=4.0
 pypdfium2>=4.30
 pillow>=10.0
+cryptography>=42

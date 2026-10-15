@@ -3,6 +3,7 @@
 Nothing is kept: every job directory is deleted JOB_TTL seconds after upload.
 """
 import asyncio
+import logging
 import hmac
 import io
 import os
@@ -23,6 +24,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 from pypdf import PdfReader, PdfWriter
 
+log = logging.getLogger("uvicorn.error")
 PIN = os.environ.get("PDF_SPLITTER_PIN", "")
 DATA_DIR = Path(os.environ.get("PDF_SPLITTER_DATA", "data")).resolve()
 JOB_TTL = int(os.environ.get("PDF_SPLITTER_TTL_SECONDS", 15 * 60))
@@ -123,13 +125,14 @@ async def upload(request: Request, username: str = Form(...), pin: str = Form(..
                 out.write(chunk)
         try:
             reader = PdfReader(path)
-            if reader.is_encrypted:
+            if reader.is_encrypted and not reader.decrypt(""):
                 raise HTTPException(400, "Password-protected PDFs are not supported.")
             pages = len(reader.pages)
         except HTTPException:
             raise
-        except Exception:
-            raise HTTPException(400, "That does not look like a valid PDF.")
+        except Exception as e:
+            log.warning("rejected upload %r (%d bytes): %r", file.filename, size, e)
+            raise HTTPException(400, f"Could not read that PDF ({type(e).__name__}: {e}).")
         if pages == 0:
             raise HTTPException(400, "The PDF has no pages.")
     except BaseException:
