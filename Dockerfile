@@ -10,7 +10,8 @@ COPY app ./app
 
 RUN useradd --system --uid 10001 app && mkdir /scratch && chown app /scratch
 USER app
-ENV PDF_SPLITTER_DATA=/scratch
+# Root fs is read-only: uploads >1 MB are spooled to a temp file, so TMPDIR must be writable too.
+ENV PDF_SPLITTER_DATA=/scratch TMPDIR=/scratch
 
 EXPOSE 8000
 # Single worker: job state is held in memory.
