@@ -1,0 +1,23 @@
+services:
+  pdf-splitter:
+    build: .
+    restart: unless-stopped
+    ports:
+      - "${PORT:-8000}:8000"
+    environment:
+      PDF_SPLITTER_PIN: ${PDF_SPLITTER_PIN:?set PDF_SPLITTER_PIN in .env or the environment}
+      PDF_SPLITTER_TTL_SECONDS: ${PDF_SPLITTER_TTL_SECONDS:-900}
+      PDF_SPLITTER_MAX_UPLOAD_MB: ${PDF_SPLITTER_MAX_UPLOAD_MB:-500}
+    # Uploads and zips live only in RAM-backed scratch space and vanish when
+    # the container stops. Size it to hold several concurrent uploads + zips.
+    tmpfs:
+      - /scratch:size=${SCRATCH_SIZE:-4g},uid=10001
+    read_only: true
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request as u; u.urlopen('http://localhost:8000/')"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
