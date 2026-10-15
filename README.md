@@ -41,3 +41,7 @@ Listens on `PORT` (default 8000). Put a reverse proxy with HTTPS in front (e.g. 
 raise its upload limit to match `PDF_SPLITTER_MAX_UPLOAD_MB` (nginx: `client_max_body_size`).
 Scratch space is a RAM-backed tmpfs (`SCRATCH_SIZE`, default 4g, counts against memory only as used),
 so files never touch disk and disappear if the container stops.
+
+The container joins the external `dino-app` Docker network (it must already exist:
+`docker network create dino-app` if the dino-app stack isn't running). Other containers on that
+network can reach it at `http://pdf-splitter:8000`.
