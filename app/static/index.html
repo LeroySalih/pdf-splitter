@@ -1,0 +1,155 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>PDF Splitter</title>
+<style>
+  :root { --bg:#f5f6f8; --card:#fff; --ink:#1d2433; --muted:#667085; --accent:#2457d6; --err:#c0392b; --line:#d9dde5; }
+  @media (prefers-color-scheme: dark) { :root { --bg:#14171f; --card:#1d222d; --ink:#e8ebf2; --muted:#9aa3b5; --accent:#6c93ff; --line:#323949; } }
+  * { box-sizing: border-box; }
+  body { margin:0; font:16px/1.4 system-ui,sans-serif; background:var(--bg); color:var(--ink); }
+  main { max-width:1100px; margin:0 auto; padding:24px 16px 80px; }
+  h1 { font-size:1.4rem; margin:0 0 16px; }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:10px; padding:20px; }
+  label { display:block; margin:0 0 14px; font-weight:600; font-size:.9rem; }
+  input { display:block; width:100%; margin-top:4px; padding:9px 10px; font:inherit; border:1px solid var(--line); border-radius:6px; background:var(--bg); color:var(--ink); }
+  button { font:inherit; padding:9px 16px; border:0; border-radius:6px; background:var(--accent); color:#fff; cursor:pointer; }
+  button.secondary { background:transparent; color:var(--accent); border:1px solid var(--accent); }
+  button:disabled { opacity:.5; cursor:default; }
+  #login { max-width:420px; margin:40px auto; }
+  .err { color:var(--err); margin:10px 0 0; min-height:1.2em; }
+  progress { width:100%; margin-top:12px; }
+  .hidden { display:none !important; }
+  .bar { position:sticky; top:0; z-index:2; display:flex; flex-wrap:wrap; gap:12px 20px; align-items:flex-end; margin-bottom:16px; }
+  .bar label { margin:0; width:160px; }
+  .bar .grow { flex:1; }
+  .timer { color:var(--muted); font-size:.9rem; }
+  .grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(170px,1fr)); gap:14px; }
+  .page { background:var(--card); border:1px solid var(--line); border-radius:8px; padding:8px; text-align:center; }
+  .page.rotated { border-color:var(--accent); }
+  .thumb { height:200px; display:flex; align-items:center; justify-content:center; overflow:hidden; }
+  .thumb img { max-width:100%; max-height:100%; transition:transform .2s; background:#fff; box-shadow:0 1px 4px #0003; }
+  .page .row { display:flex; justify-content:space-between; align-items:center; margin-top:6px; font-size:.85rem; color:var(--muted); }
+  .page button { padding:3px 9px; font-size:1.1rem; }
+  #results a { display:block; margin:4px 0; color:var(--accent); }
+</style>
+</head>
+<body>
+<main>
+  <h1>PDF Splitter</h1>
+
+  <form id="login" class="card">
+    <label>User name <input id="username" required maxlength="50" autocomplete="username"></label>
+    <label>Pass pin <input id="pin" type="password" required autocomplete="off"></label>
+    <label>PDF file <input id="file" type="file" accept="application/pdf,.pdf" required></label>
+    <button id="uploadBtn">Upload</button>
+    <progress id="progress" class="hidden" max="100"></progress>
+    <p class="err" id="loginErr"></p>
+    <p class="timer">Files are deleted from the server 15 minutes after upload.</p>
+  </form>
+
+  <section id="editor" class="hidden">
+    <div class="card bar">
+      <label>Pages per file <input id="perFile" type="number" min="1" value="10"></label>
+      <label>Max zip size (MB) <input id="maxMb" type="number" min="0.1" step="any" placeholder="no limit"></label>
+      <button id="splitBtn">Split &amp; download</button>
+      <button id="rotAll" class="secondary" title="Rotate every page 180°">Rotate all 180°</button>
+      <span class="grow"></span>
+      <span class="timer" id="info"></span>
+    </div>
+    <p class="err" id="splitErr"></p>
+    <div class="card hidden" id="results"></div>
+    <div class="grid" id="grid"></div>
+  </section>
+</main>
+
+<script>
+const $ = id => document.getElementById(id);
+let job = null, rot = [], expiresAt = 0, timerId = null;
+
+$('login').onsubmit = e => {
+  e.preventDefault();
+  $('loginErr').textContent = '';
+  const fd = new FormData();
+  fd.append('username', $('username').value);
+  fd.append('pin', $('pin').value);
+  fd.append('file', $('file').files[0]);
+  const xhr = new XMLHttpRequest();
+  xhr.open('POST', '/api/upload');
+  xhr.upload.onprogress = ev => { if (ev.lengthComputable) $('progress').value = ev.loaded / ev.total * 100; };
+  xhr.onload = () => {
+    $('progress').classList.add('hidden'); $('uploadBtn').disabled = false;
+    const body = JSON.parse(xhr.responseText || '{}');
+    if (xhr.status !== 200) { $('loginErr').textContent = body.detail || 'Upload failed.'; return; }
+    start(body);
+  };
+  xhr.onerror = () => { $('progress').classList.add('hidden'); $('uploadBtn').disabled = false; $('loginErr').textContent = 'Network error.'; };
+  $('progress').value = 0; $('progress').classList.remove('hidden'); $('uploadBtn').disabled = true;
+  xhr.send(fd);
+};
+
+function start(j) {
+  job = j; rot = new Array(j.pages).fill(0);
+  expiresAt = Date.now() + j.ttl * 1000;
+  $('login').classList.add('hidden'); $('editor').classList.remove('hidden');
+  const grid = $('grid');
+  for (let i = 0; i < j.pages; i++) {
+    const d = document.createElement('div');
+    d.className = 'page';
+    d.innerHTML = `<div class="thumb"><img loading="lazy" alt="Page ${i + 1}" src="/api/jobs/${j.id}/thumb/${i}"></div>
+      <div class="row"><button class="secondary" title="Rotate left">↺</button><span>${i + 1}</span><button class="secondary" title="Rotate right">↻</button></div>`;
+    const [l, r] = d.querySelectorAll('button');
+    l.onclick = () => rotate(i, -90); r.onclick = () => rotate(i, 90);
+    grid.appendChild(d);
+  }
+  timerId = setInterval(tick, 1000); tick();
+}
+
+function rotate(i, d) {
+  rot[i] = ((rot[i] + d) % 360 + 360) % 360;
+  const el = $('grid').children[i];
+  el.querySelector('img').style.transform = `rotate(${rot[i]}deg)` + (rot[i] % 180 ? ' scale(.75)' : '');
+  el.classList.toggle('rotated', rot[i] !== 0);
+}
+$('rotAll').onclick = () => rot.forEach((_, i) => rotate(i, 180));
+
+function tick() {
+  const s = Math.max(0, Math.round((expiresAt - Date.now()) / 1000));
+  $('info').textContent = `${job.pages} pages · files deleted in ${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
+  if (s === 0) { clearInterval(timerId); $('editor').innerHTML = '<div class="card">This upload has expired and been deleted. Reload the page to start again.</div>'; }
+}
+
+$('splitBtn').onclick = async () => {
+  $('splitErr').textContent = ''; $('results').classList.add('hidden');
+  const rotations = {};
+  rot.forEach((d, i) => { if (d) rotations[i] = d; });
+  const mb = parseFloat($('maxMb').value);
+  $('splitBtn').disabled = true; $('splitBtn').textContent = 'Working…';
+  try {
+    const res = await fetch(`/api/jobs/${job.id}/split`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ pages_per_file: parseInt($('perFile').value) || 1, max_zip_mb: mb > 0 ? mb : null, rotations }),
+    });
+    const body = await res.json();
+    if (!res.ok) throw new Error(typeof body.detail === 'string' ? body.detail : 'Check your inputs.');
+    showResults(body.zips);
+  } catch (e) { $('splitErr').textContent = e.message; }
+  $('splitBtn').disabled = false; $('splitBtn').textContent = 'Split & download';
+};
+
+function showResults(zips) {
+  const box = $('results');
+  box.innerHTML = '<strong>Your files</strong> (downloads start automatically; use the links if your browser blocks some):';
+  zips.forEach(z => {
+    const a = document.createElement('a');
+    a.href = z.url; a.download = z.name;
+    a.textContent = `${z.name} — ${z.files} files, ${(z.size / 1048576).toFixed(1)} MB`;
+    box.appendChild(a);
+  });
+  box.classList.remove('hidden');
+  zips.forEach((z, n) => setTimeout(() => { const a = document.createElement('a'); a.href = z.url; a.download = z.name; a.click(); }, n * 1000));
+}
+</script>
+</body>
+</html>
