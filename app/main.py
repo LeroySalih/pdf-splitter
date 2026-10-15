@@ -36,6 +36,13 @@ pdfium_lock = threading.Lock()  # pdfium is not thread-safe
 failures: dict[str, list[float]] = {}
 
 
+def clear_data_dir() -> None:
+    """Empty DATA_DIR but keep the directory itself (it may be a mount point)."""
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
+    for p in DATA_DIR.iterdir():
+        shutil.rmtree(p, ignore_errors=True) if p.is_dir() else p.unlink(missing_ok=True)
+
+
 def purge_expired(now: float | None = None) -> None:
     now = now or time.time()
     with jobs_lock:
@@ -60,12 +67,11 @@ async def janitor():
 async def lifespan(app: FastAPI):
     if not PIN:
         raise RuntimeError("Set PDF_SPLITTER_PIN to the pass pin teachers must enter.")
-    shutil.rmtree(DATA_DIR, ignore_errors=True)
-    DATA_DIR.mkdir(parents=True)
+    clear_data_dir()
     task = asyncio.create_task(janitor())
     yield
     task.cancel()
-    shutil.rmtree(DATA_DIR, ignore_errors=True)
+    clear_data_dir()
 
 
 app = FastAPI(lifespan=lifespan)
