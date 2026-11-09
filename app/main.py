@@ -174,7 +174,8 @@ class SplitRequest(BaseModel):
     pages_per_file: int = Field(ge=1)
     max_zip_mb: float | None = Field(default=None, gt=0)
     rotations: dict[int, int] = {}  # 0-based page -> clockwise degrees
-    remove_first_page: bool = False  # drop the front sheet of every split file
+    trim_first: int = Field(default=0, ge=0)  # pages dropped from the start of every split file
+    trim_last: int = Field(default=0, ge=0)  # pages dropped from the end of every split file
 
 
 ZIP_OVERHEAD = 22  # end-of-central-directory record
@@ -206,10 +207,10 @@ def split(job_id: str, req: SplitRequest):
     # Build each fixed-size PDF, pack greedily into zips under the size limit.
     groups: list[list[tuple[str, bytes]]] = [[]]
     used = ZIP_OVERHEAD
-    skipped: list[int] = []  # 1-based first pages of chunks left empty by the trim
+    skipped: list[int] = []  # 1-based first pages of chunks left empty by trimming
     for chunk_start in range(0, total, req.pages_per_file):
         end = min(chunk_start + req.pages_per_file, total)
-        start = chunk_start + 1 if req.remove_first_page else chunk_start
+        start, end = chunk_start + req.trim_first, end - req.trim_last
         if start >= end:
             skipped.append(chunk_start + 1)
             continue
@@ -236,8 +237,8 @@ def split(job_id: str, req: SplitRequest):
         used += cost
 
     if not groups[0]:
-        raise HTTPException(400, "Removing the first page leaves nothing: every file would be empty. "
-                                 "Use more pages per file.")
+        raise HTTPException(400, "Removing those pages leaves nothing: every file would be empty. "
+                                 "Use more pages per file or remove fewer.")
     out = []
     for n, files in enumerate(groups, 1):
         zname = f"{base}.zip" if len(groups) == 1 else f"{base}_{n:0{len(str(len(groups)))}d}of{len(groups)}.zip"

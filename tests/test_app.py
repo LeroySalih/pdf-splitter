@@ -57,10 +57,10 @@ def test_bad_pdf():
         assert not list(m.DATA_DIR.iterdir())
 
 
-def test_remove_first_page():
+def test_trim_first_and_last():
     with TestClient(m.app) as c:
         j = up(c, data=make_pdf(25)).json()["id"]  # page i has width 300+i, so we can tell pages apart
-        r = c.post(f"/api/jobs/{j}/split", json={"pages_per_file": 10, "remove_first_page": True})
+        r = c.post(f"/api/jobs/{j}/split", json={"pages_per_file": 10, "trim_first": 1})
         assert r.status_code == 200, r.text
         zf = zipfile.ZipFile(io.BytesIO(c.get(r.json()["zips"][0]["url"]).content))
         names = sorted(zf.namelist())
@@ -71,8 +71,17 @@ def test_remove_first_page():
         assert "pages_02-10" in names[0]
         # trailing chunk of a single page would be empty: skipped and reported
         j2 = up(c, data=make_pdf(21)).json()["id"]
-        r = c.post(f"/api/jobs/{j2}/split", json={"pages_per_file": 10, "remove_first_page": True}).json()
+        r = c.post(f"/api/jobs/{j2}/split", json={"pages_per_file": 10, "trim_first": 1}).json()
         assert r["skipped_pages"] == [21]
         assert len(zipfile.ZipFile(io.BytesIO(c.get(r["zips"][0]["url"]).content)).namelist()) == 2
         # nothing left at all -> clear error
-        assert c.post(f"/api/jobs/{j2}/split", json={"pages_per_file": 1, "remove_first_page": True}).status_code == 400
+        assert c.post(f"/api/jobs/{j2}/split", json={"pages_per_file": 1, "trim_first": 1}).status_code == 400
+
+        # trim 2 from the front and 1 from the back of each 10-page file
+        r = c.post(f"/api/jobs/{j}/split", json={"pages_per_file": 10, "trim_first": 2, "trim_last": 1}).json()
+        zf = zipfile.ZipFile(io.BytesIO(c.get(r["zips"][0]["url"]).content))
+        names = sorted(zf.namelist())
+        pdfs = [PdfReader(io.BytesIO(zf.read(n))) for n in names]
+        assert [len(p.pages) for p in pdfs] == [7, 7, 2]  # pages 3-9, 13-19, 23-24
+        assert [float(p.pages[0].mediabox.width) for p in pdfs] == [302, 312, 322]
+        assert "pages_03-09" in names[0] and "pages_23-24" in names[2]

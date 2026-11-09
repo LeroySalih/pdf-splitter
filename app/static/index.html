@@ -22,9 +22,7 @@
   progress { width:100%; margin-top:12px; }
   .hidden { display:none !important; }
   .bar { position:sticky; top:0; z-index:2; display:flex; flex-wrap:wrap; gap:12px 20px; align-items:flex-end; margin-bottom:16px; }
-  .bar label { margin:0; width:160px; }
-  .bar label.check { width:auto; display:flex; gap:8px; align-items:center; font-weight:600; }
-  .bar label.check input { display:inline; width:auto; margin:0; }
+  .bar label { margin:0; width:150px; }
   .page.dropped .thumb { opacity:.35; }
   .page.dropped::after { content:'removed'; display:block; font-size:.75rem; color:var(--err); }
   .bar .grow { flex:1; }
@@ -57,7 +55,8 @@
     <div class="card bar">
       <label>Pages per file <input id="perFile" type="number" min="1" value="10"></label>
       <label>Max zip size (MB) <input id="maxMb" type="number" min="0.1" step="any" placeholder="no limit"></label>
-      <label class="check"><input id="dropFirst" type="checkbox"> Remove first page of each file <small>(front sheet)</small></label>
+      <label>Remove first pages <input id="trimFirst" type="number" min="0" value="0" title="Pages removed from the start of every file (e.g. a front sheet)"></label>
+      <label>Remove last pages <input id="trimLast" type="number" min="0" value="0" title="Pages removed from the end of every file"></label>
       <button id="splitBtn">Split &amp; download</button>
       <button id="rotAll" class="secondary" title="Rotate every page 180°">Rotate all 180°</button>
       <span class="grow"></span>
@@ -112,10 +111,15 @@ function start(j) {
 }
 
 function markDropped() {
-  const n = parseInt($('perFile').value) || 1, on = $('dropFirst').checked;
-  [...$('grid').children].forEach((el, i) => el.classList.toggle('dropped', on && i % n === 0));
+  const n = parseInt($('perFile').value) || 1;
+  const f = parseInt($('trimFirst').value) || 0, l = parseInt($('trimLast').value) || 0;
+  const total = job.pages;
+  [...$('grid').children].forEach((el, i) => {
+    const pos = i % n, size = Math.min(n, total - i + pos); // position in its file, and that file's length
+    el.classList.toggle('dropped', pos < f || pos >= size - l);
+  });
 }
-$('dropFirst').onchange = $('perFile').oninput = markDropped;
+['perFile', 'trimFirst', 'trimLast'].forEach(id => $(id).oninput = markDropped);
 
 function rotate(i, d) {
   rot[i] = ((rot[i] + d) % 360 + 360) % 360;
@@ -140,7 +144,7 @@ $('splitBtn').onclick = async () => {
   try {
     const res = await fetch(`/api/jobs/${job.id}/split`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ pages_per_file: parseInt($('perFile').value) || 1, max_zip_mb: mb > 0 ? mb : null, rotations, remove_first_page: $('dropFirst').checked }),
+      body: JSON.stringify({ pages_per_file: parseInt($('perFile').value) || 1, max_zip_mb: mb > 0 ? mb : null, rotations, trim_first: parseInt($('trimFirst').value) || 0, trim_last: parseInt($('trimLast').value) || 0 }),
     });
     const body = await res.json();
     if (!res.ok) throw new Error(typeof body.detail === 'string' ? body.detail : 'Check your inputs.');
@@ -160,7 +164,7 @@ function showResults(zips, skipped = []) {
   });
   if (skipped.length) {
     const p = document.createElement('p');
-    p.textContent = `Left out (only a front sheet, nothing remaining): the file starting at page ${skipped.join(', ')}.`;
+    p.textContent = `Left out (nothing remaining after trimming): the file starting at page ${skipped.join(', ')}.`;
     box.appendChild(p);
   }
   box.classList.remove('hidden');
