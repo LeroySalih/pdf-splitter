@@ -55,3 +55,24 @@ def test_bad_pdf():
     with TestClient(m.app) as c:
         assert up(c, data=b"not a pdf").status_code == 400
         assert not list(m.DATA_DIR.iterdir())
+
+
+def test_remove_first_page():
+    with TestClient(m.app) as c:
+        j = up(c, data=make_pdf(25)).json()["id"]  # page i has width 300+i, so we can tell pages apart
+        r = c.post(f"/api/jobs/{j}/split", json={"pages_per_file": 10, "remove_first_page": True})
+        assert r.status_code == 200, r.text
+        zf = zipfile.ZipFile(io.BytesIO(c.get(r.json()["zips"][0]["url"]).content))
+        names = sorted(zf.namelist())
+        assert len(names) == 3
+        pdfs = [PdfReader(io.BytesIO(zf.read(n))) for n in names]
+        assert [len(p.pages) for p in pdfs] == [9, 9, 4]
+        assert [float(p.pages[0].mediabox.width) for p in pdfs] == [301, 311, 321]  # pages 2, 12, 22
+        assert "pages_02-10" in names[0]
+        # trailing chunk of a single page would be empty: skipped and reported
+        j2 = up(c, data=make_pdf(21)).json()["id"]
+        r = c.post(f"/api/jobs/{j2}/split", json={"pages_per_file": 10, "remove_first_page": True}).json()
+        assert r["skipped_pages"] == [21]
+        assert len(zipfile.ZipFile(io.BytesIO(c.get(r["zips"][0]["url"]).content)).namelist()) == 2
+        # nothing left at all -> clear error
+        assert c.post(f"/api/jobs/{j2}/split", json={"pages_per_file": 1, "remove_first_page": True}).status_code == 400

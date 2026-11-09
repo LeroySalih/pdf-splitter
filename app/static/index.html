@@ -23,6 +23,10 @@
   .hidden { display:none !important; }
   .bar { position:sticky; top:0; z-index:2; display:flex; flex-wrap:wrap; gap:12px 20px; align-items:flex-end; margin-bottom:16px; }
   .bar label { margin:0; width:160px; }
+  .bar label.check { width:auto; display:flex; gap:8px; align-items:center; font-weight:600; }
+  .bar label.check input { display:inline; width:auto; margin:0; }
+  .page.dropped .thumb { opacity:.35; }
+  .page.dropped::after { content:'removed'; display:block; font-size:.75rem; color:var(--err); }
   .bar .grow { flex:1; }
   .timer { color:var(--muted); font-size:.9rem; }
   .grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(170px,1fr)); gap:14px; }
@@ -53,6 +57,7 @@
     <div class="card bar">
       <label>Pages per file <input id="perFile" type="number" min="1" value="10"></label>
       <label>Max zip size (MB) <input id="maxMb" type="number" min="0.1" step="any" placeholder="no limit"></label>
+      <label class="check"><input id="dropFirst" type="checkbox"> Remove first page of each file <small>(front sheet)</small></label>
       <button id="splitBtn">Split &amp; download</button>
       <button id="rotAll" class="secondary" title="Rotate every page 180°">Rotate all 180°</button>
       <span class="grow"></span>
@@ -106,6 +111,12 @@ function start(j) {
   timerId = setInterval(tick, 1000); tick();
 }
 
+function markDropped() {
+  const n = parseInt($('perFile').value) || 1, on = $('dropFirst').checked;
+  [...$('grid').children].forEach((el, i) => el.classList.toggle('dropped', on && i % n === 0));
+}
+$('dropFirst').onchange = $('perFile').oninput = markDropped;
+
 function rotate(i, d) {
   rot[i] = ((rot[i] + d) % 360 + 360) % 360;
   const el = $('grid').children[i];
@@ -129,16 +140,16 @@ $('splitBtn').onclick = async () => {
   try {
     const res = await fetch(`/api/jobs/${job.id}/split`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ pages_per_file: parseInt($('perFile').value) || 1, max_zip_mb: mb > 0 ? mb : null, rotations }),
+      body: JSON.stringify({ pages_per_file: parseInt($('perFile').value) || 1, max_zip_mb: mb > 0 ? mb : null, rotations, remove_first_page: $('dropFirst').checked }),
     });
     const body = await res.json();
     if (!res.ok) throw new Error(typeof body.detail === 'string' ? body.detail : 'Check your inputs.');
-    showResults(body.zips);
+    showResults(body.zips, body.skipped_pages);
   } catch (e) { $('splitErr').textContent = e.message; }
   $('splitBtn').disabled = false; $('splitBtn').textContent = 'Split & download';
 };
 
-function showResults(zips) {
+function showResults(zips, skipped = []) {
   const box = $('results');
   box.innerHTML = '<strong>Your files</strong> (downloads start automatically; use the links if your browser blocks some):';
   zips.forEach(z => {
@@ -147,6 +158,11 @@ function showResults(zips) {
     a.textContent = `${z.name} — ${z.files} files, ${(z.size / 1048576).toFixed(1)} MB`;
     box.appendChild(a);
   });
+  if (skipped.length) {
+    const p = document.createElement('p');
+    p.textContent = `Left out (only a front sheet, nothing remaining): the file starting at page ${skipped.join(', ')}.`;
+    box.appendChild(p);
+  }
   box.classList.remove('hidden');
   zips.forEach((z, n) => setTimeout(() => { const a = document.createElement('a'); a.href = z.url; a.download = z.name; a.click(); }, n * 1000));
 }

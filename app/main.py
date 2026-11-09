@@ -174,6 +174,7 @@ class SplitRequest(BaseModel):
     pages_per_file: int = Field(ge=1)
     max_zip_mb: float | None = Field(default=None, gt=0)
     rotations: dict[int, int] = {}  # 0-based page -> clockwise degrees
+    remove_first_page: bool = False  # drop the front sheet of every split file
 
 
 ZIP_OVERHEAD = 22  # end-of-central-directory record
@@ -205,8 +206,13 @@ def split(job_id: str, req: SplitRequest):
     # Build each fixed-size PDF, pack greedily into zips under the size limit.
     groups: list[list[tuple[str, bytes]]] = [[]]
     used = ZIP_OVERHEAD
-    for start in range(0, total, req.pages_per_file):
-        end = min(start + req.pages_per_file, total)
+    skipped: list[int] = []  # 1-based first pages of chunks left empty by the trim
+    for chunk_start in range(0, total, req.pages_per_file):
+        end = min(chunk_start + req.pages_per_file, total)
+        start = chunk_start + 1 if req.remove_first_page else chunk_start
+        if start >= end:
+            skipped.append(chunk_start + 1)
+            continue
         writer = PdfWriter()
         for i in range(start, end):
             page = reader.pages[i]
@@ -229,6 +235,9 @@ def split(job_id: str, req: SplitRequest):
         groups[-1].append((name, data))
         used += cost
 
+    if not groups[0]:
+        raise HTTPException(400, "Removing the first page leaves nothing: every file would be empty. "
+                                 "Use more pages per file.")
     out = []
     for n, files in enumerate(groups, 1):
         zname = f"{base}.zip" if len(groups) == 1 else f"{base}_{n:0{len(str(len(groups)))}d}of{len(groups)}.zip"
@@ -242,7 +251,7 @@ def split(job_id: str, req: SplitRequest):
         job["zips"][zname] = {"file": zname}
         out.append({"name": zname, "size": size, "files": len(files),
                     "url": f"/api/jobs/{job_id}/zips/{zname}"})
-    return {"zips": out}
+    return {"zips": out, "skipped_pages": skipped}
 
 
 @app.get("/api/jobs/{job_id}/zips/{name}")
